@@ -36,16 +36,24 @@ class SonicID_Dataset(Dataset):
         mix_path = os.path.join(track_path, "mixture.wav")
         target_path = os.path.join(track_path, "other.wav")
 
-        info = torchaudio.info(mix_path)
-        total_samples = info.num_frames
+        import soundfile as sf
+        info = sf.info(mix_path)
+        total_samples = info.frames
 
         if total_samples > self.chunk_samples:
             start_frame = random.randint(0, total_samples - self.chunk_samples)
         else:
             start_frame = 0
 
-        mix_chunk, _ = torchaudio.load(mix_path, frame_offset=start_frame, num_frames=self.chunk_samples)
-        target_chunk, _ = torchaudio.load(target_path, frame_offset=start_frame, num_frames=self.chunk_samples)
+        # torchaudio.load Windows'ta FFmpeg veya torchcodec DLL hatalarına (Libtorchcodec Error) yol açtığından,
+        # en hatasız ve stabil çalışan "soundfile.read" metodunu kullanıyoruz.
+        mix_np, _ = sf.read(mix_path, start=start_frame, frames=self.chunk_samples, dtype='float32', always_2d=True)
+        target_np, _ = sf.read(target_path, start=start_frame, frames=self.chunk_samples, dtype='float32', always_2d=True)
+        
+        # soundfile veriyi (frames, channels) numpy formatında verir. 
+        # Modellerimiz Tensor kullandığı için Pytorch'un beklentisi olan (channels, frames) formatına ".T" (Transpose) ile çeviriyoruz.
+        mix_chunk = torch.from_numpy(mix_np).T
+        target_chunk = torch.from_numpy(target_np).T
 
         if mix_chunk.shape[1] < self.chunk_samples:
             pad_amount = self.chunk_samples - mix_chunk.shape[1]
@@ -64,7 +72,7 @@ class SonicID_Dataset(Dataset):
 if __name__ == "__main__":
     # İŞTE BURASI: İndirdiğin MUSDB18-HQ verisinin "train" klasörünün yolunu buraya yazıyoruz.
     # Windows yollarında ters slash (\) hata vermesin diye başa 'r' koyuyoruz.
-    veri_yolu = r"C:\Users\jiyan\Desktop\musdb18hq\train" 
+    veri_yolu = r"C:\Users\jiyan\Desktop\sonic-id\data\train" 
     
     print(f"Veri şu konumda aranıyor: {veri_yolu}")
     
