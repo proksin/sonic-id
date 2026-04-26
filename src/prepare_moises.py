@@ -1,81 +1,117 @@
 import os
 import soundfile as sf
 import numpy as np
-import json
 import glob
+import shutil
 
-def prepare_moises_data(moises_dir, output_dir, target_instrument="vocals"):
+def prepare_dataset(input_dir, output_dir, target_instrument="guitar"):
     """
-    MoisesDB formatındaki klasörleri (bass, drums, vb. alt klasörler), 
-    SonicID modelinin eğitimde beklediği formata (mixture.wav ve diğer) dönüştürür.
+    Hem MUSDB18-HQ (train/test alt klasörlü ve direkt wav'lı) 
+    hem de MoisesDB (alt klasörlerde wav'lı) formatlarını otomatik algılar 
+    ve modeli besleyeceğimiz standart formata dönüştürür.
+    100 şarkının birbirine karışma (Cacophony) bug'ı giderilmiştir!
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
-    song_dirs = [d for d in os.listdir(moises_dir) if os.path.isdir(os.path.join(moises_dir, d))]
+    song_dirs = []
     
-    print(f"Toplam {len(song_dirs)} şarkı bulundu. Dönüştürülüyor...")
+    # 1. AKILLI KLASÖR ALGILAMA SİSTEMİ
+    # Eğer input_dir içinde "train" veya "test" varsa, şarkılar onların içindedir (MUSDB18-HQ Formatı)
+    if os.path.exists(os.path.join(input_dir, "train")) or os.path.exists(os.path.join(input_dir, "test")):
+        print(">> MUSDB18-HQ Klasör Yapısı Algılandı ('train' / 'test' alt klasörleri var).")
+        for sub in ["train", "test"]:
+            sub_path = os.path.join(input_dir, sub)
+            if os.path.exists(sub_path):
+                for d in os.listdir(sub_path):
+                    full_path = os.path.join(sub_path, d)
+                    if os.path.isdir(full_path):
+                        song_dirs.append(full_path)
+    else:
+        # MoisesDB / Düz Klasör Yapısı
+        print(">> MoisesDB / Düz Şarkı Klasör Yapısı Algılandı.")
+        for d in os.listdir(input_dir):
+            full_path = os.path.join(input_dir, d)
+            if os.path.isdir(full_path):
+                song_dirs.append(full_path)
+                
+    print(f"\nToplam {len(song_dirs)} şarkı klasörü tek tek işlenecek...\n")
     
-    for idx, song_folder in enumerate(song_dirs):
-        song_path = os.path.join(moises_dir, song_folder)
+    for idx, song_path in enumerate(song_dirs):
+        song_name = os.path.basename(song_path)
+        out_song_path = os.path.join(output_dir, f"song_{idx:03d}_{song_name.replace(' ', '_')}")
         
-        # Eğer klasör değilse atla
-        if not os.path.isdir(song_path): continue
-            
-        out_song_path = os.path.join(output_dir, f"song_{idx:03d}")
         if not os.path.exists(out_song_path):
             os.makedirs(out_song_path)
             
-        # Şarkı içindeki tüm wav dosyalarını bulalım
-        all_wavs = glob.glob(os.path.join(song_path, "*", "*.wav"))
+        # Şarkı klasöründeki wav dosyalarını bul (Hem direkt içinde hem de alt klasörlerinde arar)
+        wavs_direct = glob.glob(os.path.join(song_path, "*.wav"))
+        wavs_sub = glob.glob(os.path.join(song_path, "*", "*.wav"))
+        all_wavs = wavs_direct + wavs_sub
+        
         if len(all_wavs) == 0:
             continue
             
-        print(f"[{idx+1}/{len(song_dirs)}] İşleniyor: {song_folder}")
+        print(f"[{idx+1}/{len(song_dirs)}] İşleniyor: {song_name}")
         
         mixture_audio = None
         target_audio = None
         sr = 44100
         
-        # Her bir wav dosyasını oku ve mix'in içine ekle
+        # Eğer klasörde zaten orijinalinden "mixture.wav" varsa amelelik yapıp baştan mixlemeye gerek yok
+        has_premixed_mixture = any(os.path.basename(w).lower() == "mixture.wav" for w in all_wavs)
+        
         for wav_file in all_wavs:
-            parent_dir = os.path.basename(os.path.dirname(wav_file))
+            file_name = os.path.basename(wav_file).lower()
+            parent_dir = os.path.basename(os.path.dirname(wav_file)).lower()
+            
+            # Ses dosyasını RAM'e al
             audio, sr = sf.read(wav_file, always_2d=True)
             
-            # Mixture'a ekle (Üst üste bindir - Mixle)
-            if mixture_audio is None:
-                mixture_audio = np.zeros_like(audio)
-            
-            # Eğer boyutlar uyuşmuyorsa, en kısa olana göre kes (Normalde hepsi aynı boyuttadır)
-            min_len = min(mixture_audio.shape[0], audio.shape[0])
-            mixture_audio = mixture_audio[:min_len]
-            audio_adj = audio[:min_len]
-            
-            mixture_audio += audio_adj
-            
-            # Hedef enstrüman ise (Örn: "vocals" veya "guitar"), target.wav için ayır
-            if target_instrument in parent_dir.lower():
+            # ------ TARGET (Hedef) AYRIŞTIRMA ------
+            # İsimde veya bulunduğu alt klasörün isminde 'target_instrument' geçiyorsa
+            if target_instrument.lower() in file_name or target_instrument.lower() in parent_dir:
                 if target_audio is None:
                     target_audio = np.zeros_like(audio)
-                target_audio_adj = target_audio[:min_len]
-                target_audio_adj += audio_adj
-                target_audio = target_audio_adj
+                min_len = min(target_audio.shape[0], audio.shape[0])
+                target_audio = target_audio[:min_len] + audio[:min_len]
                 
-        # Kalau target_audio hiç bulunamadıysa içini boş (sessiz) dolduralım (Model hata vermesin diye)
+            # ------ MIXTURE (Miks) OLUŞTURMA ------
+            if has_premixed_mixture:
+                if file_name == "mixture.wav":
+                    mixture_audio = audio
+            else:
+                # Orijinal miks yoksa, her kanalı (bateri, gitar, vokal) üst üste bindirerek mix yarat (MoisesDB)
+                if mixture_audio is None:
+                    mixture_audio = np.zeros_like(audio)
+                min_len = min(mixture_audio.shape[0], audio.shape[0])
+                mixture_audio = mixture_audio[:min_len] + audio[:min_len]
+
+        # Hedef bulunamadıysa model çökmesin diye sessizlik ekle
         if target_audio is None:
-            print(f"  Uyarı: Bu şarkıda '{target_instrument}' bulunamadı. Boş bir dosya oluşturuluyor.")
-            target_audio = np.zeros_like(mixture_audio)
+            print(f"  --> Uyarı: Bu şarkıda '{target_instrument}' bulunamadı. Boş bir dosya oluşturuluyor.")
+            if mixture_audio is not None:
+                target_audio = np.zeros_like(mixture_audio)
+            else:
+                continue
+
+        if mixture_audio is None:
+            continue
             
-        # Kaydet
-        sf.write(os.path.join(out_song_path, "mixture.wav"), mixture_audio, sr)
-        
-        # dataset.py içerisinde "other.wav" olarak arandığı için your dosyayı "other.wav" adıyla kaydediyoruz.
-        sf.write(os.path.join(out_song_path, "other.wav"), target_audio, sr)
+        # Dosyaları diske yaz
+        final_len = min(mixture_audio.shape[0], target_audio.shape[0])
+        sf.write(os.path.join(out_song_path, "mixture.wav"), mixture_audio[:final_len], sr)
+        sf.write(os.path.join(out_song_path, f"{target_instrument}.wav"), target_audio[:final_len], sr)
 
 if __name__ == "__main__":
-    MOISES_KLASORU = r"C:\Users\jiyan\Desktop\mosie"
-    HEDEF_KLASOR = r"C:\Users\jiyan\Desktop\sonic-id\data\train"
-    AYRILACAK_ENSTRUMAN = "guitar"  # Veya 'guitar', 'bass' vs. ne istersen yaz.
+    # Veri setinizin olduğu yer (MUSDB18-HQ veya MoisesDB)
+    GIRDI_KLASORU = r"C:\Users\jiyan\Desktop\mosie" 
     
-    prepare_moises_data(MOISES_KLASORU, HEDEF_KLASOR, target_instrument=AYRILACAK_ENSTRUMAN)
-    print("İşlem tamam! Veriler artık dataset.py'nin okuyabileceği formata çevrildi.")
+    # Çıktıların (U-Net'in okuyacağı şekilde) kaydedileceği temiz klasör
+    CIKTI_KLASORU = r"C:\Users\jiyan\Desktop\sonic-id\data\train_processed"
+    
+    # Hangi enstrümanı çekip çıkartmak istiyorsun? (Moises için "guitar", MUSDB18 için "other" tavsiye edilir)
+    AYRILACAK_ENSTRUMAN = "guitar"  
+    
+    prepare_dataset(GIRDI_KLASORU, CIKTI_KLASORU, target_instrument=AYRILACAK_ENSTRUMAN)
+    print("\n[BAŞARILI] İşlem tamam! Veriler artık kusursuzca ayrıştırıldı.")
