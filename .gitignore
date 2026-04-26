@@ -1,4 +1,27 @@
+# Ses Verileri (Gitar kayıtları, büyük miksler vb.)
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Dataset Klasörleri
 data/
-*.zip
+mosie/
+moises*/
+
+# Yapay Zeka Model Ağırlıkları (Yüzlerce MB'lık dosyalar)
 checkpoints/
+*.pth
+*.pt
+*.ckpt
+
+# Arşivler
 *.zip
+*.rar
+*.tar.gz
+
+# Python ve IDE Artıkları
+__pycache__/
+*.pyc
+.vscode/
+.idea/

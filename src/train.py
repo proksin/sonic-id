@@ -49,11 +49,12 @@ def train_sonic_id():
     print(f"Harika! Eğitim verisi hazır. Toplam klasör: {len(dataset)}")
 
     # 3. Model ve Motorlar (Optimizasyon vs)
-    model = UNet(in_channels=2, out_channels=2).to(device)
+    model = UNet(in_channels=4, out_channels=2).to(device)
     
-    # Maske (Tahmin) x Orijinal Genlik (Hedef) eşleştirmesi!
-    # L1Loss, akustik hatalarda L2 (MSE) loss'a göre daha keskin frekanslar verir.
-    criterion = nn.L1Loss()
+    import torchaudio.functional as F_audio
+    
+    # SNR Loss'u desteklemek ve çok ince cızırtıları sıfırlamak için küçük bir L1 destekleyici kenarda duracak.
+    criterion_l1 = nn.L1Loss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     # 4. Eğitim Döngüsü (Training Loop)
@@ -65,19 +66,46 @@ def train_sonic_id():
         model.train()
         running_loss = 0.0
         
-        for batch_idx, (mix_spec, target_spec) in enumerate(dataloader):
+        for batch_idx, (mix_spec, reference_spec, target_spec) in enumerate(dataloader):
             # Tensörleri GPU'ya / CPU'ya at
             mix_spec = mix_spec.to(device)
+            reference_spec = reference_spec.to(device)
             target_spec = target_spec.to(device)
             
-            # Forward Pass: Model miksi alıp bir Maske (0-1 arası) üretiyor.
-            mask = model(mix_spec)
+            # Girdi 1 (Mix) ve Girdi 2 (Referans) birleştirilir (Concatenation)
+            combined_input = torch.cat([mix_spec, reference_spec], dim=1)
+            
+            # Forward Pass: Model 4 kanala bakıp miks üzerinden bir Maske (0-1 arası) üretiyor.
+            mask = model(combined_input)
             
             # Üretilen maskeyi miksin genliğiyle çarparak kendi ayrıştırdığı vizyonu elde ediyoruz
             isolated_spec = mix_spec * mask
             
             # Gerçekte (target) olması gereken spektrograma ne kadar benziyor? Hesapla!
-            loss = criterion(isolated_spec, target_spec)
+            # [YENİ] L1 Loss yerine Makaledeki Scale-Invariant SNR (dB Loss) kullanıyoruz (Denklem 2).
+            # Model piksellerin rengini değil, resmin içindeki "Ses Enerjisini (Akustik Güç)" çözmek zorunda bırakılıyor.
+            B = isolated_spec.shape[0]
+            preds_flat = isolated_spec.view(B, -1)
+            targets_flat = target_spec.view(B, -1)
+            
+            # SI-SNR (Makale Denklem 2) - Manuel (Manuel hesaplama kütüphane bağımsızdır)
+            eps = 1e-8
+            target_energy = torch.sum(targets_flat ** 2, dim=-1, keepdim=True)
+            alpha = torch.sum(preds_flat * targets_flat, dim=-1, keepdim=True) / (target_energy + eps)
+            s_target = alpha * targets_flat
+            e_noise = preds_flat - s_target
+            
+            s_target_energy = torch.sum(s_target ** 2, dim=-1)
+            e_noise_energy = torch.sum(e_noise ** 2, dim=-1)
+            si_snr_db = 10 * torch.log10(s_target_energy / (e_noise_energy + eps) + eps)
+            
+            # Negatife alıp Loss olarak optimize ediyoruz
+            loss_snr = -torch.mean(si_snr_db) 
+            
+            # Çok ufak (0.1) bir L1 pürüzleri temizler (Sparsity)
+            loss_l1 = criterion_l1(isolated_spec, target_spec)
+            
+            loss = loss_snr + (0.1 * loss_l1)
             
             # Backward Pass (Zamanda Geri Sarıp Hatayı Düzeltme)
             optimizer.zero_grad()
@@ -93,14 +121,17 @@ def train_sonic_id():
         avg_loss = running_loss / len(dataloader)
         print(f"=== EPOCH {epoch} TAMAMLANDI === | Ortalama Loss: {avg_loss:.4f}\n")
         
-        # 5. Sadece model daha iyi öğrendiğinde kaydet (Disk dolmasını engeller)
+        # 5. Her epoch'ta modeli kaydet (Bulut sunucuda yer problemi olmayacağı için)
+        model_save_path = os.path.join(CHECKPOINT_DIR, f"sonic_id_epoch_{epoch}.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"[*] Model kaydedildi -> {model_save_path}")
+        
+        # En iyi modeli de ayrıca güncelleyelim
         if avg_loss < best_loss:
             best_loss = avg_loss
-            model_save_path = os.path.join(CHECKPOINT_DIR, "sonic_id_best_model.pth")
-            torch.save(model.state_dict(), model_save_path)
-            print(f"[*] Yeni EN İYİ model kaydedildi! (Loss: {best_loss:.4f}) -> {model_save_path}")
-        else:
-            print(f"[-] Loss düşmedi (En iyi: {best_loss:.4f}). Disk tasarrufu için kaydedilmedi.")
+            best_model_save_path = os.path.join(CHECKPOINT_DIR, "sonic_id_best_model.pth")
+            torch.save(model.state_dict(), best_model_save_path)
+            print(f"[+] Yeni EN İYİ loss seviyesi! (Loss: {best_loss:.4f})")
 
     print("=== TAMAMLANDI: Otonom EQ Kalibrasyonu için H-RACE modülüne gönderilmeye hazır. ===")
 

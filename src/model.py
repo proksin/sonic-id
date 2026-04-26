@@ -118,9 +118,9 @@ class UNet(nn.Module):
 
 # Kendi kendini test edebilmesi için minik bir blok:
 if __name__ == "__main__":
-    # Test için mock/dummy tensör = Batch:1, Kanal:2 (Stereo), Frekans: 513, Zaman: 259
-    test_input = torch.randn((1, 2, 513, 259)) 
-    model = UNet(in_channels=2, out_channels=2)
+    # Test için mock/dummy tensör = Batch:1, Kanal:4 (Miks + Referans), Frekans: 513, Zaman: 259
+    test_input = torch.randn((1, 4, 513, 259)) 
+    model = UNet(in_channels=4, out_channels=2)
     output_mask = model(test_input)
     
     print(f"[Phase 1.5 TEST BAŞARILI] Girdi: {test_input.shape} | Soft-Mask Çıktısı: {output_mask.shape}")
