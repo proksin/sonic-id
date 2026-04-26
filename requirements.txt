@@ -1,0 +1,6 @@
+# Sonic ID - RunPod / Cloud GPU Requirements
+torch>=2.0.0
+torchaudio>=2.0.0
+soundfile>=0.12.1
+numpy>=1.21.0
+tqdm>=4.65.0

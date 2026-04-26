@@ -6,8 +6,9 @@ import torchaudio.transforms as T
 from torch.utils.data import Dataset, DataLoader
 
 class SonicID_Dataset(Dataset):
-    def __init__(self, root_dir, window_size=3.0, sample_rate=44100):
+    def __init__(self, root_dir, target_file="gitar.wav", window_size=3.0, sample_rate=44100):
         self.root_dir = root_dir
+        self.target_file = target_file
         self.window_size = window_size
         self.sample_rate = sample_rate
         self.chunk_samples = int(window_size * sample_rate)
@@ -51,7 +52,7 @@ class SonicID_Dataset(Dataset):
         track_path = self.tracks[idx]
 
         mix_path = os.path.join(track_path, "mixture.wav")
-        target_path = os.path.join(track_path, "other.wav")
+        target_path = os.path.join(track_path, self.target_file)
 
         import soundfile as sf
         info = sf.info(mix_path)

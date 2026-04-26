@@ -1,3 +1,4 @@
+import argparse
 import os
 import torch
 import torch.nn as nn
@@ -5,21 +6,27 @@ from torch.utils.data import DataLoader
 from dataset import SonicID_Dataset
 from model import UNet
 
-def train_sonic_id():
+def parse_args():
+    parser = argparse.ArgumentParser(description="Sonic ID - Cloud GPU Eğitim Betiği")
+    parser.add_argument("--data_path", type=str, default="data/train", help="Linux/Windows klasör yolu")
+    parser.add_argument("--target_file", type=str, default="gitar.wav", help="İzole edilecek hedefin dosya adı")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    return parser.parse_args()
+
+def train_sonic_id(args):
     """
-    Sonic ID (Phase 1) - U-Net Model Eğitimi 
-    Amacımız elektro gitar (veya ayarlanan target) ağırlıklarını ayıracak 
-    maskeyi modelin öğrenmesini sağlamak. 
-    İleride özel veri setiyle Fine-Tune çalışmasına hazır (esnek) yazılmıştır.
+    Sonic ID (Phase 1.5) - U-Net Model Eğitimi 
+    Bulut GPU (RunPod vb.) sistemlere uyumlu dinamik argüman alan versiyon.
     """
     # ------------------ HIPERPARAMETRELER ------------------
-    EPOCHS = 100
-    BATCH_SIZE = 8
-    LEARNING_RATE = 1e-3
+    EPOCHS = args.epochs
+    BATCH_SIZE = args.batch_size
+    LEARNING_RATE = args.lr
     WINDOW_SIZE = 3.0
-    
-    # Veri setimiz nerede? (dataset.py'daki yol ile uyumlu olmalı)
-    DATA_PATH = r"C:\Users\jiyan\Desktop\sonic-id\data\train" 
+    DATA_PATH = args.data_path
+    TARGET_FILE = args.target_file
     
     # Kaydedilecek weights noktaları
     CHECKPOINT_DIR = "../checkpoints"
@@ -40,7 +47,7 @@ def train_sonic_id():
     # 2. Veri Yükleyici (DataLoader) 
     print(f"[{DATA_PATH}] konumundan parçalar RAM'e yükleniyor...")
     try:
-        dataset = SonicID_Dataset(root_dir=DATA_PATH, window_size=WINDOW_SIZE)
+        dataset = SonicID_Dataset(root_dir=DATA_PATH, target_file=TARGET_FILE, window_size=WINDOW_SIZE)
         dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
     except Exception as e:
         print(f"HATA! Veri seti yüklenemedi. Yol (Path) doğru mu? Detay: {e}")
@@ -136,4 +143,5 @@ def train_sonic_id():
     print("=== TAMAMLANDI: Otonom EQ Kalibrasyonu için H-RACE modülüne gönderilmeye hazır. ===")
 
 if __name__ == "__main__":
-    train_sonic_id()
+    args = parse_args()
+    train_sonic_id(args)
