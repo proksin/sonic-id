@@ -6,12 +6,13 @@ import torchaudio.transforms as T
 from torch.utils.data import Dataset, DataLoader
 
 class SonicID_Dataset(Dataset):
-    def __init__(self, root_dir, target_file="gitar.wav", window_size=3.0, sample_rate=44100):
+    def __init__(self, root_dir, target_file="gitar.wav", window_size=3.0, sample_rate=44100, chunks_per_track=50):
         self.root_dir = root_dir
         self.target_file = target_file
         self.window_size = window_size
         self.sample_rate = sample_rate
         self.chunk_samples = int(window_size * sample_rate)
+        self.chunks_per_track = chunks_per_track  # Her şarkıdan kaç farklı 3 saniyelik pencere alınacak
 
         # ---------------------------------------------------------
         # YENİ EKLENEN KISIM: STFT (Spektrogram) Ayarları
@@ -46,10 +47,14 @@ class SonicID_Dataset(Dataset):
         return waveform
 
     def __len__(self):
-        return len(self.tracks)
+        # 150 şarkı × 50 chunk = 7500 sample/epoch → ~937 batch (batch_size=8 ile)
+        # Bu sayede her epoch gerçekten anlamlı bir veri miktarını görür.
+        return len(self.tracks) * self.chunks_per_track
 
     def __getitem__(self, idx):
-        track_path = self.tracks[idx]
+        # idx'i şarkı indeksine çevir (chunks_per_track'e göre modulo al)
+        track_idx = idx % len(self.tracks)
+        track_path = self.tracks[track_idx]
 
         mix_path = os.path.join(track_path, "mixture.wav")
         target_path = os.path.join(track_path, self.target_file)
