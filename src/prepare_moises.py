@@ -2,12 +2,11 @@ import os
 import soundfile as sf
 import numpy as np
 import glob
-import argparse
 
-def prepare_moises_data(moises_dir, output_dir, target_instrument="other"):
+def prepare_moises_data(moises_dir, output_dir, target_instrument="vocals"):
     """
     MUSDB18-HQ formatındaki klasörleri (train ve test altındaki şarkıları), 
-    SonicID modelinin eğitimde beklediği formata (mixture.wav ve diğer) dönüştürür.
+    SonicID modelinin eğitimde beklediği formata (mixture.wav ve other.wav) dönüştürür.
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -45,7 +44,6 @@ def prepare_moises_data(moises_dir, output_dir, target_instrument="other"):
         for wav_file in all_wavs:
             file_name = os.path.basename(wav_file).lower()
             
-            # Hedef enstrümanı bul (Örn: vocals.wav veya other.wav)
             if target_instrument.lower() in file_name:
                 target_audio, sr = sf.read(wav_file, always_2d=True)
                 
@@ -55,13 +53,12 @@ def prepare_moises_data(moises_dir, output_dir, target_instrument="other"):
                 audio, sr = sf.read(wav_file, always_2d=True)
                 if mixture_audio is None:
                     mixture_audio = np.zeros_like(audio)
-                
                 min_len = min(mixture_audio.shape[0], audio.shape[0])
                 mixture_audio = mixture_audio[:min_len]
                 mixture_audio += audio[:min_len]
                 
         if target_audio is None:
-            print(f"  Uyarı: Bu şarkıda '{target_instrument}' bulunamadı. Boş bir dosya oluşturuluyor.")
+            print(f"  Uyarı: '{target_instrument}' bulunamadı. Boş dosya oluşturuluyor.")
             if mixture_audio is not None:
                 target_audio = np.zeros_like(mixture_audio)
             else:
@@ -74,20 +71,13 @@ def prepare_moises_data(moises_dir, output_dir, target_instrument="other"):
         mixture_audio = mixture_audio[:min_len]
         target_audio = target_audio[:min_len]
             
-        # dataset.py'nin okuyacağı isimlerle kaydet
         sf.write(os.path.join(out_song_path, "mixture.wav"), mixture_audio, sr)
-        
-        # DİKKAT: train.py varsayılan olarak "gitar.wav" arayacağı için, 
-        # bulduğumuz hedef enstrümanı doğrudan target_file formatında kaydediyoruz.
-        sf.write(os.path.join(out_song_path, f"{target_instrument}.wav"), target_audio, sr)
+        sf.write(os.path.join(out_song_path, "other.wav"), target_audio, sr)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input_dir", type=str, default="/workspace/sonic-id/data/moises")
-    parser.add_argument("--output_dir", type=str, default="/workspace/sonic-id/data/train")
-    # Eğer modelin gitar/other (diğer enstrümanlar) ayırmasını istiyorsan MUSDB18 için "other" yazmalısın.
-    parser.add_argument("--target", type=str, default="other")
-    args = parser.parse_args()
+    MOISES_KLASORU = "/workspace/sonic-id/data/moises"
+    HEDEF_KLASOR = "/workspace/sonic-id/data/train"
+    AYRILACAK_ENSTRUMAN = "vocals"
     
-    prepare_moises_data(args.input_dir, args.output_dir, target_instrument=args.target)
-    print("İşlem tamam!")
+    prepare_moises_data(MOISES_KLASORU, HEDEF_KLASOR, target_instrument=AYRILACAK_ENSTRUMAN)
+    print("İşlem tamam! Veriler artık dataset.py'nin okuyabileceği formata çevrildi.")
