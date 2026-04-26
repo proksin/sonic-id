@@ -2,40 +2,39 @@ import os
 import soundfile as sf
 import numpy as np
 import glob
-import shutil
 
 def prepare_dataset(input_dir, output_dir, target_instrument="guitar"):
     """
-    Hem MUSDB18-HQ (train/test alt klasörlü ve direkt wav'lı) 
-    hem de MoisesDB (alt klasörlerde wav'lı) formatlarını otomatik algılar 
-    ve modeli besleyeceğimiz standart formata dönüştürür.
-    100 şarkının birbirine karışma (Cacophony) bug'ı giderilmiştir!
+    Hem MUSDB18-HQ hem de MoisesDB formatlarını, klasör yapısı ne kadar derin olursa olsun
+    otomatik algılar ve modeli besleyeceğimiz standart formata dönüştürür.
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
-    song_dirs = []
+    print(">> Veri setindeki tüm ses dosyaları derinlemesine taranıyor (Recursive Search)...")
     
-    # 1. AKILLI KLASÖR ALGILAMA SİSTEMİ
-    # Eğer input_dir içinde "train" veya "test" varsa, şarkılar onların içindedir (MUSDB18-HQ Formatı)
-    if os.path.exists(os.path.join(input_dir, "train")) or os.path.exists(os.path.join(input_dir, "test")):
-        print(">> MUSDB18-HQ Klasör Yapısı Algılandı ('train' / 'test' alt klasörleri var).")
-        for sub in ["train", "test"]:
-            sub_path = os.path.join(input_dir, sub)
-            if os.path.exists(sub_path):
-                for d in os.listdir(sub_path):
-                    full_path = os.path.join(sub_path, d)
-                    if os.path.isdir(full_path):
-                        song_dirs.append(full_path)
-    else:
-        # MoisesDB / Düz Klasör Yapısı
-        print(">> MoisesDB / Düz Şarkı Klasör Yapısı Algılandı.")
-        for d in os.listdir(input_dir):
-            full_path = os.path.join(input_dir, d)
-            if os.path.isdir(full_path):
-                song_dirs.append(full_path)
-                
-    print(f"\nToplam {len(song_dirs)} şarkı klasörü tek tek işlenecek...\n")
+    # 1. KUSURSUZ KLASÖR ALGILAMA SİSTEMİ
+    # Klasör derinliği ne olursa olsun içindeki tüm .wav dosyalarını X-Ray gibi bulur.
+    all_wav_files = glob.glob(os.path.join(input_dir, "**", "*.wav"), recursive=True)
+    
+    if not all_wav_files:
+        print("HATA: Belirtilen klasörde hiçbir .wav dosyası bulunamadı!")
+        return
+
+    # İçinde .wav barındıran benzersiz klasörleri (yani şarkıların ana dizinlerini) tespit et
+    unique_dirs = list(set(os.path.dirname(w) for w in all_wav_files))
+    
+    song_dirs = []
+    # Sadece içinde birden fazla .wav olanları "şarkı" olarak kabul et (hedef + miks veya diğer stemler)
+    for d in unique_dirs:
+        wavs_in_dir = glob.glob(os.path.join(d, "*.wav"))
+        if len(wavs_in_dir) >= 2:
+            song_dirs.append(d)
+            
+    # Her çalıştırmada aynı sırayla işlemesi için klasörleri alfabetik diz
+    song_dirs = sorted(song_dirs)
+    
+    print(f"\nToplam {len(song_dirs)} şarkı klasörü bulundu ve tek tek işlenecek...\n")
     
     for idx, song_path in enumerate(song_dirs):
         song_name = os.path.basename(song_path)
@@ -44,21 +43,15 @@ def prepare_dataset(input_dir, output_dir, target_instrument="guitar"):
         if not os.path.exists(out_song_path):
             os.makedirs(out_song_path)
             
-        # Şarkı klasöründeki wav dosyalarını bul (Hem direkt içinde hem de alt klasörlerinde arar)
-        wavs_direct = glob.glob(os.path.join(song_path, "*.wav"))
-        wavs_sub = glob.glob(os.path.join(song_path, "*", "*.wav"))
-        all_wavs = wavs_direct + wavs_sub
+        all_wavs = glob.glob(os.path.join(song_path, "*.wav"))
         
-        if len(all_wavs) == 0:
-            continue
-            
-        print(f"[{idx+1}/{len(song_dirs)}] İşleniyor: {song_name}")
+        print(f"[{idx+1}/{len(song_dirs)}] İşleniyor: {song_name} ({len(all_wavs)} stem bulundu)")
         
         mixture_audio = None
         target_audio = None
         sr = 44100
         
-        # Eğer klasörde zaten orijinalinden "mixture.wav" varsa amelelik yapıp baştan mixlemeye gerek yok
+        # Eğer klasörde zaten orijinalinden "mixture.wav" varsa baştan mixlemeye gerek yok
         has_premixed_mixture = any(os.path.basename(w).lower() == "mixture.wav" for w in all_wavs)
         
         for wav_file in all_wavs:
@@ -69,7 +62,6 @@ def prepare_dataset(input_dir, output_dir, target_instrument="guitar"):
             audio, sr = sf.read(wav_file, always_2d=True)
             
             # ------ TARGET (Hedef) AYRIŞTIRMA ------
-            # İsimde veya bulunduğu alt klasörün isminde 'target_instrument' geçiyorsa
             if target_instrument.lower() in file_name or target_instrument.lower() in parent_dir:
                 if target_audio is None:
                     target_audio = np.zeros_like(audio)
@@ -81,7 +73,7 @@ def prepare_dataset(input_dir, output_dir, target_instrument="guitar"):
                 if file_name == "mixture.wav":
                     mixture_audio = audio
             else:
-                # Orijinal miks yoksa, her kanalı (bateri, gitar, vokal) üst üste bindirerek mix yarat (MoisesDB)
+                # Orijinal miks yoksa, her kanalı üst üste bindirerek mix yarat (MoisesDB)
                 if mixture_audio is None:
                     mixture_audio = np.zeros_like(audio)
                 min_len = min(mixture_audio.shape[0], audio.shape[0])
@@ -110,7 +102,7 @@ if __name__ == "__main__":
     # Çıktıların (U-Net'in okuyacağı şekilde) kaydedileceği temiz klasör
     CIKTI_KLASORU = r"C:\Users\jiyan\Desktop\sonic-id\data\train_processed"
     
-    # Hangi enstrümanı çekip çıkartmak istiyorsun? (Moises için "guitar", MUSDB18 için "other" tavsiye edilir)
+    # Hangi enstrümanı çekip çıkartmak istiyorsun?
     AYRILACAK_ENSTRUMAN = "guitar"  
     
     prepare_dataset(GIRDI_KLASORU, CIKTI_KLASORU, target_instrument=AYRILACAK_ENSTRUMAN)
