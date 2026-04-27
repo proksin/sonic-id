@@ -13,6 +13,8 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--resume", type=str, default=None, help="Devam edilecek checkpoint dosyasının yolu (.pth)")
+    parser.add_argument("--start_epoch", type=int, default=1, help="Başlanacak epoch numarası (resume ile kullanılır)")
     return parser.parse_args()
 
 def train_sonic_id(args):
@@ -58,18 +60,36 @@ def train_sonic_id(args):
     # 3. Model ve Motorlar (Optimizasyon vs)
     model = UNet(in_channels=4, out_channels=2).to(device)
     
-    import torchaudio.functional as F_audio
-    
     # SNR Loss'u desteklemek ve çok ince cızırtıları sıfırlamak için küçük bir L1 destekleyici kenarda duracak.
     criterion_l1 = nn.L1Loss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+    # -------- CHECKPOINT RESUME --------
+    START_EPOCH = args.start_epoch
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print(f"[*] Checkpoint yükleniyor: {args.resume}")
+            checkpoint = torch.load(args.resume, map_location=device)
+            # Eski format: sadece state_dict kaydedilmişse
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                START_EPOCH = checkpoint.get('epoch', START_EPOCH) + 1
+                print(f"[+] Optimizer durumu da yüklendi. Epoch {START_EPOCH}'den devam ediliyor.")
+            else:
+                # Sadece model ağırlıkları kaydedilmiş (eski format)
+                model.load_state_dict(checkpoint)
+                print(f"[+] Model ağırlıkları yüklendi. Epoch {START_EPOCH}'den devam ediliyor.")
+        else:
+            print(f"[!] UYARI: Checkpoint bulunamadı: {args.resume}. Sıfırdan başlanıyor.")
+    # -----------------------------------
 
     # 4. Eğitim Döngüsü (Training Loop)
     print("\n---------- EĞİTİM (TRAIN) BAŞLIYOR ----------")
     
     best_loss = float('inf')
     
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(START_EPOCH, EPOCHS + 1):
         model.train()
         running_loss = 0.0
         
@@ -130,7 +150,13 @@ def train_sonic_id(args):
         
         # 5. Her epoch'ta modeli kaydet (Bulut sunucuda yer problemi olmayacağı için)
         model_save_path = os.path.join(CHECKPOINT_DIR, f"sonic_id_epoch_{epoch}.pth")
-        torch.save(model.state_dict(), model_save_path)
+        # Optimizer state'i de kaydet → ileride tam resume yapılabilsin
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_loss,
+        }, model_save_path)
         print(f"[*] Model kaydedildi -> {model_save_path}")
         
         # En iyi modeli de ayrıca güncelleyelim
